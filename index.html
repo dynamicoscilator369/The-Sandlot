@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>The Sandlot — Look Through the Looking Glass</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #050505; color: #e8e0d5; font-family: "Courier New", monospace; }
+  #canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+  #ui { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; z-index: 10; }
+  .glass {
+    width: min(70vw, 420px); height: min(70vw, 420px);
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.15);
+    background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.08), transparent 60%),
+                radial-gradient(circle at 70% 70%, rgba(100,80,60,0.1), transparent 50%);
+    box-shadow: 0 0 80px rgba(66, 42, 20, 0.3), inset 0 0 60px rgba(0,0,0,0.8);
+    cursor: pointer; pointer-events: auto; transition: all 1.2s ease;
+    display: flex; align-items: center; justify-content: center;
+    position: relative;
+  }
+  .glass::after {
+    content: ""; position: absolute; inset: 8%; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.05);
+  }
+  .glass.entered {
+    transform: scale(3); opacity: 0; pointer-events: none;
+  }
+  #prompt {
+    margin-top: 40px; font-size: 13px; letter-spacing: 0.2em; text-transform: uppercase;
+    opacity: 0.6; transition: opacity 1s;
+  }
+  #sequence {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    text-align: center; font-size: clamp(18px, 4vw, 32px); line-height: 1.5;
+    opacity: 0; transition: opacity 1.5s ease; max-width: 90vw; pointer-events: none;
+  }
+  #law {
+    position: absolute; bottom: 12%; left: 50%; transform: translateX(-50%);
+    text-align: center; font-size: clamp(14px, 2.5vw, 20px); opacity: 0;
+    letter-spacing: 0.05em; max-width: 80vw; transition: opacity 2s ease 0.5s;
+  }
+  .pulse { animation: pulse 2.38s ease-in-out infinite; } /* ~42/17.6 subharmonic feel */
+  @keyframes pulse { 0%,100% { opacity: 0.7; } 50% { opacity: 1; } }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="ui">
+  <div class="glass" id="glass"></div>
+  <div id="prompt">look through the looking glass</div>
+  <div id="sequence"></div>
+  <div id="law"></div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const glass = document.getElementById('glass');
+const prompt = document.getElementById('prompt');
+const sequence = document.getElementById('sequence');
+const law = document.getElementById('law');
+
+let W, H, entered = false, time = 0;
+let audioCtx, binaural, sub, noiseBuf;
+
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// Golden ratio
+const PHI = (1 + Math.sqrt(5)) / 2;
+
+// Particles for the lot
+const particles = Array.from({length: 180}, () => ({
+  x: Math.random(), y: Math.random(),
+  r: Math.random() * 1.8 + 0.3,
+  speed: Math.random() * 0.0004 + 0.0001,
+  phase: Math.random() * Math.PI * 2
+}));
+
+function drawLot(t) {
+  ctx.fillStyle = '#050505';
+  ctx.fillRect(0, 0, W, H);
+
+  // subtle dirt texture
+  for (let i = 0; i < 40; i++) {
+    ctx.fillStyle = `rgba(40,30,20,${0.03 + Math.random()*0.04})`;
+    ctx.beginPath();
+    ctx.arc(Math.random()*W, Math.random()*H, Math.random()*3, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // Z=0 center glow
+  const cx = W/2, cy = H/2;
+  const pulse = 0.5 + 0.5 * Math.sin(t * 0.042 * Math.PI * 2); // slow visual of 42Hz family
+  const grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, 280);
+  grd.addColorStop(0, `rgba(120, 80, 40, ${0.12 * pulse})`);
+  grd.addColorStop(0.4, `rgba(60, 40, 20, ${0.06 * pulse})`);
+  grd.addColorStop(1, 'transparent');
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, 0, W, H);
+
+  // Golden ratio spirals
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.strokeStyle = `rgba(180, 140, 80, ${0.15 + 0.1 * pulse})`;
+  ctx.lineWidth = 1;
+  for (let s = 0; s < 3; s++) {
+    ctx.beginPath();
+    for (let a = 0; a < Math.PI * 8; a += 0.05) {
+      const r = 8 * Math.pow(PHI, a / (Math.PI * 2)) * (0.7 + s * 0.4);
+      const x = Math.cos(a + t * 0.1 + s) * r;
+      const y = Math.sin(a + t * 0.1 + s) * r;
+      if (a === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Soft radial suggestion of 13 shells
+  for (let i = 0; i < 13; i++) {
+    const ang = (i / 13) * Math.PI * 2 + t * 0.02;
+    const rad = 180 + 40 * Math.sin(t * 0.3 + i);
+    ctx.beginPath();
+    ctx.arc(cx + Math.cos(ang) * rad, cy + Math.sin(ang) * rad, 12, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(140, 100, 50, ${0.04 + 0.03 * pulse})`;
+    ctx.fill();
+  }
+
+  // Particles
+  particles.forEach(p => {
+    p.phase += p.speed * 60;
+    const px = p.x * W + Math.sin(p.phase) * 20;
+    const py = p.y * H + Math.cos(p.phase * 0.7) * 15;
+    ctx.beginPath();
+    ctx.arc(px, py, p.r, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(200, 160, 90, ${0.15 + 0.2 * Math.sin(p.phase)})`;
+    ctx.fill();
+  });
+}
+
+function animate(t) {
+  time = t * 0.001;
+  if (entered) drawLot(time);
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
+async function startAudio() {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+  // Cough - noise burst
+  const coughDur = 0.6;
+  const coughBuf = audioCtx.createBuffer(1, audioCtx.sampleRate * coughDur, audioCtx.sampleRate);
+  const coughData = coughBuf.getChannelData(0);
+  for (let i = 0; i < coughData.length; i++) {
+    const env = Math.exp(-i / (audioCtx.sampleRate * 0.15));
+    coughData[i] = (Math.random() * 2 - 1) * env * 0.7;
+  }
+  const cough = audioCtx.createBufferSource();
+  cough.buffer = coughBuf;
+  const coughFilter = audioCtx.createBiquadFilter();
+  coughFilter.type = 'bandpass';
+  coughFilter.frequency.value = 800;
+  coughFilter.Q.value = 0.8;
+  const coughGain = audioCtx.createGain();
+  coughGain.gain.setValueAtTime(0.9, audioCtx.currentTime);
+  coughGain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + coughDur);
+  cough.connect(coughFilter);
+  coughFilter.connect(coughGain);
+  coughGain.connect(audioCtx.destination);
+  cough.start();
+
+  // 42 Hz binaural + 3ms IATD
+  const carrier = 86;
+  const left = audioCtx.createOscillator();
+  const right = audioCtx.createOscillator();
+  left.type = right.type = 'sine';
+  left.frequency.value = carrier;
+  right.frequency.value = carrier + 42;
+
+  const leftG = audioCtx.createGain();
+  const rightG = audioCtx.createGain();
+  leftG.gain.value = 0.12;
+  rightG.gain.value = 0.12;
+
+  const delay = audioCtx.createDelay(0.1);
+  delay.delayTime.value = 0.003;
+
+  const merger = audioCtx.createChannelMerger(2);
+  left.connect(leftG); leftG.connect(merger, 0, 0);
+  right.connect(rightG); rightG.connect(delay); delay.connect(merger, 0, 1);
+  merger.connect(audioCtx.destination);
+
+  // Deep sub + A420 weight
+  const sub = audioCtx.createOscillator();
+  sub.type = 'sine';
+  sub.frequency.value = 42;
+  const subG = audioCtx.createGain();
+  subG.gain.value = 0.18;
+  const subFilter = audioCtx.createBiquadFilter();
+  subFilter.type = 'lowpass';
+  subFilter.frequency.value = 90;
+  sub.connect(subFilter); subFilter.connect(subG); subG.connect(audioCtx.destination);
+
+  // Extra low detuned layer for weight (A420 reference feel)
+  const weight = audioCtx.createOscillator();
+  weight.type = 'sawtooth';
+  weight.frequency.value = 52.5; // approximate low partial of A420 family
+  const wG = audioCtx.createGain();
+  wG.gain.value = 0.04;
+  const wF = audioCtx.createBiquadFilter();
+  wF.type = 'lowpass';
+  wF.frequency.value = 140;
+  weight.connect(wF); wF.connect(wG); wG.connect(audioCtx.destination);
+
+  left.start(); right.start(); sub.start(); weight.start();
+
+  // Fade in the field after cough
+  leftG.gain.setValueAtTime(0, audioCtx.currentTime);
+  rightG.gain.setValueAtTime(0, audioCtx.currentTime);
+  subG.gain.setValueAtTime(0, audioCtx.currentTime);
+  leftG.gain.linearRampToValueAtTime(0.12, audioCtx.currentTime + 1.8);
+  rightG.gain.linearRampToValueAtTime(0.12, audioCtx.currentTime + 1.8);
+  subG.gain.linearRampToValueAtTime(0.18, audioCtx.currentTime + 2.2);
+}
+
+function enter() {
+  if (entered) return;
+  entered = true;
+  glass.classList.add('entered');
+  prompt.style.opacity = '0';
+
+  startAudio();
+
+  // Sequence text
+  setTimeout(() => {
+    sequence.style.opacity = '1';
+    sequence.innerHTML = 'COUGH&nbsp;&nbsp;COUGH&nbsp;&nbsp;COUGH';
+  }, 200);
+
+  setTimeout(() => {
+    sequence.innerHTML = 'TRITONE';
+  }, 1400);
+
+  setTimeout(() => {
+    sequence.innerHTML = 'ALRIGHT NOW';
+  }, 2600);
+
+  setTimeout(() => {
+    sequence.style.opacity = '0';
+  }, 4200);
+
+  setTimeout(() => {
+    law.innerHTML = 'Every person is the master of their own reality.<br>They just have to remember.';
+    law.style.opacity = '1';
+    law.classList.add('pulse');
+  }, 4800);
+}
+
+glass.addEventListener('click', enter);
+glass.addEventListener('touchstart', (e) => { e.preventDefault(); enter(); });
+
+// Auto gentle prompt after a moment
+setTimeout(() => {
+  if (!entered) prompt.style.opacity = '0.9';
+}, 1500);
+</script>
+</body>
+</html>
